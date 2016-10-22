@@ -51,7 +51,6 @@ connection:
 #include <avr/interrupt.h>
 #include <avr/pgmspace.h>
 #include <avr/eeprom.h>
-#include <avr/lcda.h>
 
 #define nop() __asm__ __volatile__ ("nop")
 #define WAIT 1
