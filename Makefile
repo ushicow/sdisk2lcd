@@ -80,7 +80,7 @@ OBJDIR = .
 
 
 # List C source files here. (C dependencies are automatically generated.)
-SRC = $(TARGET).c 
+SRC = $(TARGET).c disp.c
 
 
 # List C++ source files here. (C dependencies are automatically generated.)
@@ -94,13 +94,13 @@ CPPSRC =
 #     Even though the DOS/Win* filesystem matches both .s and .S the same,
 #     it will preserve the spelling of the filenames, and gcc itself does
 #     care about how the name is spelled on its command-line.
-ASRC = sub.S i2cmaster.S
+ASRC = sub.S
 
 
 # Optimization level, can be [0, 1, 2, 3, s]. 
 #     0 = turn off optimization. s = optimize for size.
 #     (Note: 3 is not always the best optimization level. See avr-libc FAQ.)
-OPT = 3
+OPT = 2
 
 
 # Debugging format.

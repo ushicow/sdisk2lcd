@@ -42,6 +42,9 @@ connection:
 	<others>
 	D5: LED
 	C5: connect to C6 (RESET) for software reset
+	D0: DOWN
+	D5: UP
+	B0: ENTER
 	
 	Note that the enable input of the 3state buffer 74HC125,
 	should be connected with DRIVE ENABLE.
@@ -51,6 +54,9 @@ connection:
 #include <avr/interrupt.h>
 #include <avr/pgmspace.h>
 #include <avr/eeprom.h>
+#include <string.h>
+#include <stdlib.h>
+#include "disp.h"
 
 #define nop() __asm__ __volatile__ ("nop")
 #define WAIT 1
@@ -89,7 +95,11 @@ void cmd17(unsigned long adr);
 
 // ===== file manipulate functions =====
 
-int findExt(char *str, unsigned char *protect, unsigned char *name);
+void getFileName(unsigned short dir, char *name);
+// find a file whose extension is targExt,
+// and whose name is targName if withName is true
+int findExt(char *targExt, unsigned char *protect,
+	unsigned char *targName, unsigned char withName);
 // prepare the FAT table on memory
 void prepareFat(int i, unsigned short *fat, unsigned short len,
 	unsigned char fatNum, unsigned char fatElemNum);
@@ -100,11 +110,17 @@ void duplicateFat(void);
 // write to the SD cart one by one
 void writeSD(unsigned long adr, unsigned char *data, unsigned short len);
 // create a NIC image file
+int createFile(unsigned char *name, char *ext, unsigned short sectNum);
+// translate a NIC image into a DSK image
 int createNic(unsigned char *name);
 // translate a NIC image into a DSK image
 void nic2Dsk(void);
 // translate a DSK image into a NIC image
 void dsk2Nic(void);
+unsigned short makeFileNameList(unsigned short *list, char *targExt);
+// choose a NIC file from a NIC file name list
+unsigned char chooseANicFile(void *tempBuff, unsigned char btfExists, unsigned char *filebase);
+// initialization called from check_eject
 
 // ===== SDISK II main functions =====
 
@@ -132,7 +148,7 @@ unsigned long userAddr;									// the beginning of user data
 // unsigned short fatDsk[FAT_DSK_SIZE];					// use writeData instead
 unsigned short fatNic[FAT_NIC_SIZE];
 unsigned char prevFatNumDsk, prevFatNumNic;
-unsigned short nicDir, dskDir;
+unsigned short nicDir, dskDir, btfDir;
 
 // DISK II status
 volatile unsigned char ph_track;		// 0 - 139
@@ -231,7 +247,7 @@ void writeByte(unsigned char c)
 	SPDR = c;
 	// Wait for transmission complete
 	while (!(SPSR & (1<<SPIF)))
-		if (bit_is_set(PIND,3)) PORTC &= (~0b00100000);// if eject, reset
+		if (bit_is_set(PIND,3)) PORTC &= (~0b00100000);// if , reset
 }
 
 // read data from the SD card
@@ -304,18 +320,31 @@ void cmd17(unsigned long adr)
 	} while (ch != 0xfe);
 }
 
-// find a file extension
-int findExt(char *str, unsigned char *protect, unsigned char *name)
+// get a file name from a directory entry
+void getFileName(unsigned short dir, char *name)
 {
-	short i;
+	unsigned char i;
+
+	cmd(16, 8);
+	cmd17(rootAddr+dir*32);
+	for (i=0; i!=8; i++) *(name++) = (char)readByte();
+	readByte(); readByte(); // discard CRC bytes
+}
+// find a file whose extension is targExt,
+// and whose name is targName if withName is true.
+int findExt(char *targExt, unsigned char *protect,
+	unsigned char *targName, unsigned char withName)
+{
+	short i, j;
 	unsigned max_file = 512;
 	unsigned short max_time = 0, max_date = 0;
 
 	// find NIC extension
 	for (i=0; i!=512; i++) {
-		unsigned char ext[3], d;
+		unsigned char name[8], ext[3], d;
 		unsigned char time[2], date[2];
 		
+		if (bit_is_set(PIND,3)) return 512;
 		// check first char
 		cmd(16, 1);
 		cmd17(rootAddr+i*32);
@@ -329,33 +358,39 @@ int findExt(char *str, unsigned char *protect, unsigned char *name)
 		if (d&0x1e) continue;
 		if (d==0xf) continue;
 		// check extension
-		cmd(16, 4);
-		cmd17(rootAddr+i*32+8);
-		ext[0] = readByte(); ext[1] = readByte(); ext[2] = readByte();
-		if (protect) *protect = ((readByte()&1)<<4); else readByte();
+		cmd(16, 12);
+		cmd17(rootAddr+i*32);
+		for (j=0; j!=8; j++) name[j]=readByte();
+		for (j=0; j!=3; j++) ext[j]=readByte();		
+		if (protect) *protect = ((readByte()&1)<<3); else readByte();
 		readByte(); readByte(); // discard CRC bytes
+		
 		// check time stamp
 		cmd(16, 4);
 		cmd17(rootAddr+i*32+22);
 		time[0] = readByte(); time[1] = readByte();
 		date[0] = readByte(); date[1] = readByte();
 		readByte(); readByte(); // discard CRC bytes
-		if ((ext[0]==str[0])&&(ext[1]==str[1])&&(ext[2]==str[2])) {
-			unsigned short tm = *(unsigned short *)time;
-			unsigned short dt = *(unsigned short *)date;
 
-			if ((dt>max_date)||((dt==max_date)&&(tm>=max_time))) {
-				max_time = tm;
-				max_date = dt;
-				max_file = i;
+		if (memcmp(ext, targExt, 3)==0) {		
+			if ((!withName)||(memcmp(name, targName, 8)==0)) {
+				unsigned short tm = *(unsigned short *)time;
+				unsigned short dt = *(unsigned short *)date;
+
+				if ((dt>max_date)||((dt==max_date)&&(tm>=max_time))) {
+					max_time = tm;
+					max_date = dt;
+					max_file = i;
+				}
 			}
 		}
 	}
-	if ((max_file != 512) && (name != 0)) {
+
+	if ((max_file != 512) && (targName != 0) && (!withName)) {
 		unsigned char j;
 		cmd(16, 8);
 		cmd17(rootAddr+max_file*32);
-		for (j=0; j<8; j++) name[j] = readByte();
+		for (j=0; j<8; j++) targName[j] = readByte();
 		readByte(); readByte();
 	}
 	return max_file;
@@ -450,6 +485,57 @@ void duplicateFat(void)
 		PORTB |= (1<<SD_CS);
 		PORTB &= ~(1<<SD_CS);
 	}
+}
+
+// create a file image
+int createFile(unsigned char *name, char *ext, unsigned short sectNum)
+{
+	unsigned short re, clusterNum;
+	unsigned long ft, adr;
+	unsigned short d, i;
+	unsigned char c, dirEntry[32], at;
+	static unsigned char last[2] = {0xff, 0xff};
+
+	if (bit_is_set(PIND,3)) return 0;
+	
+	for (i=0; i<32; i++) dirEntry[i]=0;
+	memcp(dirEntry, (unsigned char *)name, 8);
+	memcp(dirEntry+8, (unsigned char*)ext, 3);
+	*(unsigned long *)(dirEntry+28) = (unsigned long)sectNum*512;
+	
+	// search a root directory entry
+	for (re=0; re<512; re++) {
+		cmd(16, 1);
+		cmd17(rootAddr+re*32+0);
+		c = readByte();
+		readByte(); readByte(); // discard CRC bytes
+		cmd17(rootAddr+re*32+11);
+		at = readByte();
+		readByte(); readByte(); // discard CRC bytes
+		if (((c==0xe5)||(c==0x00))&&(at!=0xf)) break;  // find a RDE!
+	}	
+	if (re==512) return 0;
+	// write a directory entry
+	writeSD(rootAddr+re*32, dirEntry, 32);	
+	// search the first fat entry
+	adr = (rootAddr+re*32+26);
+	clusterNum = 0;
+	for (ft=2;
+		(clusterNum<((sectNum+sectorsPerCluster-1)>>sectorsPerCluster2)); ft++) {
+		cmd(16, 2);
+		cmd17(fatAddr+ft*2);
+		d = readByte();
+		d += (unsigned short)readByte()*0x100;
+		readByte(); readByte(); // discard CRC bytes
+		if (d==0) {
+			clusterNum++;
+			writeSD(adr, (unsigned char *)&ft, 2);
+			adr = fatAddr+ft*2;
+		}
+	}
+	writeSD(adr, last, 2);
+	duplicateFat();
+	return 1;
 }
 
 // create a NIC image file
@@ -642,13 +728,127 @@ void dsk2Nic(void)
 	PORTD &= ~(0b00100000);
 }
 
+// make file name list and sort
+unsigned short makeFileNameList(unsigned short *list, char *targExt)
+{
+	unsigned short i, j, k, entryNum = 0;
+	char name1[8], name2[8];
+
+	// find extension
+	for (i=0; i!=512; i++) {
+		unsigned char ext[3], d;
+		
+		if (bit_is_set(PIND,3)) return 512;
+		// check first char
+		cmd(16, 1);
+		cmd17(rootAddr+i*32);
+		d = readByte();
+		readByte(); readByte(); // discard CRC bytes
+		if ((d==0x00)||(d==0x05)||(d==0x2e)||(d==0xe5)) continue;
+		if (!(((d>='A')&&(d<='Z'))||((d>='0')&&(d<='9')))) continue;
+		cmd17(rootAddr+i*32+11);
+		d = readByte();
+		readByte(); readByte(); // discard CRC bytes
+		if (d&0x1e) continue;
+		if (d==0xf) continue;
+		// check extension
+		cmd(16, 3);
+		cmd17(rootAddr+i*32+8);
+		for (j=0; j!=3; j++) ext[j]=readByte();		
+		readByte(); readByte(); // discard CRC bytes
+		if (memcmp(ext, targExt, 3)==0) {	
+			list[entryNum++] = i;
+		}
+	}
+	// sort
+	if (entryNum>1) for (i=0; i<=(entryNum-2); i++) {
+		for (j=1; j<=(entryNum-i-1); j++) {
+			getFileName(list[j], name1);
+			getFileName(list[j-1], name2);
+			if (memcmp(name1, name2,8) < 0) {
+				k = list[j];
+				list[j] = list[j-1];
+				list[j-1]=k;
+			}
+		}
+	}	
+	return entryNum;
+}
+
+// choose a NIC file from a NIC file name list
+unsigned char chooseANicFile(void *tempBuff, unsigned char btfExists, unsigned char *filebase)
+{
+	unsigned short *list = (unsigned short *)tempBuff;
+	unsigned short num = makeFileNameList(list, "NIC");
+	char name[8];
+	char filename[] = "filename.NIC";
+	short cur = 0, prevCur = -1;
+	unsigned long i;
+
+	// if there is at least one NIC file,
+	if (num > 0) {
+		// determine first file
+		if (btfExists) {
+			for (i=0; i<num; i++) {
+				getFileName(list[i], name);
+				if (memcmp(name, filebase, 8)==0) {
+					cur = i;
+					break;
+				}
+			}
+		}
+		while (1) {
+			if (bit_is_clear(PIND, 6)) { // up button pushed !
+				unsigned char flg = 1;
+			
+				for (i=0; i!=1000; i++) if (bit_is_set(PIND, 6)) flg = 0;
+				if (flg) {
+					while (bit_is_clear(PIND, 6)) nop();
+					if (cur < (num-1)) cur++;
+				}
+			}
+			if (bit_is_clear(PIND, 0)) { // down button pushed !
+				unsigned char flg = 1;
+			
+				for (i=0; i!=1000; i++) if (bit_is_set(PIND, 0)) flg = 0;
+				if (flg) {
+					while (bit_is_clear(PIND, 0)) nop();
+					if (cur > 0) cur--;
+				}
+			}
+			if (bit_is_clear(PINB, 0)) { // enter button pushed !
+				unsigned char flg = 1;
+
+				for (i=0; i!=1000; i++) if (bit_is_set(PINB, 0)) flg = 0;
+				if (flg) {
+					while (bit_is_clear(PINB, 0)) nop();
+					break;
+				}
+			}
+			// display file name
+			if (prevCur != cur) {
+				prevCur = cur;
+			
+				getFileName(list[cur], filename);
+				dispStr(LCD_ROW2, filename);
+			}
+		}
+		getFileName(list[cur], name);
+		memcpy(filebase, name, 8);
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
 // initialization SD card
 int SDinit(void)
 {
 	unsigned char ch;
 	unsigned short i;
 	char str[5];
-	unsigned char filebase[8];
+	unsigned char filebase[8], btfbase[8];
+	unsigned char btfExists, choosen;
 
 	PORTD |= 0b00100000;		// LED on
 
@@ -736,15 +936,24 @@ int SDinit(void)
 		rootAddr = fatAddr + ((unsigned long)sectorsPerFat*2*512);
 		userAddr = rootAddr+(unsigned long)512*32;
 	}
+	
+	// find "BTF" boot file
+	btfDir = findExt("BTF", (unsigned char *)0, btfbase, 0);
+	btfExists = (btfDir!=512);
+
+    // choose a NIC file from a NIC file list
+	choosen = chooseANicFile(&writeData[0][0], btfExists, btfbase);
+
+	if (btfExists||choosen) memcpy(filebase, btfbase, 8);
 
 	// find "NIC" extension
-	nicDir = findExt("NIC", &protect, (unsigned char *)0);
+	nicDir = findExt("NIC", &protect, filebase, btfExists||choosen);
 	if (nicDir == 512) {		// create NIC file if not exists
 		// find "DSK" extension
-		dskDir = findExt("DSK", (unsigned char *)0, filebase);
+		dskDir = findExt("DSK", (unsigned char *)0, filebase, btfExists);
 		if (dskDir == 512) return 0;
-		if (!createNic(filebase)) return 0;
-		nicDir = findExt("NIC", &protect, (unsigned char *)0);
+		if (!createFile(filebase, "NIC", (unsigned short)560)) return 0;
+		nicDir = findExt("NIC", &protect, filebase, btfExists);
 		if (nicDir == 512) return 0;
 		// convert DSK image to NIC image
 		dsk2Nic();
@@ -789,13 +998,13 @@ ISR(PCINT1_vect)
 
 int main(void)
 {
-	PORTB = 0b00010000;
-	PORTC = 0b00100000;
-	PORTD = 0b01001000;
+	DDRB =  0b00101100;	
+	DDRC =  0b00110000;
+	DDRD =  0b00110000;
 
-	DDRB = 0b00101100;	
-	DDRC = 0b00110000;
-	DDRD = 0b00110000;
+	PORTB = 0b00010001;
+	PORTC = 0b00100000;
+	PORTD = 0b01001001;
 
 	sei();
 
@@ -810,6 +1019,9 @@ int main(void)
 
 	unsigned long i;
 
+	dispInit();
+
+	dispStr(LCD_ROW1, "    NO DISK     ");
 	// wait long low of eject
 	for (i=0; i!=0x80000;i++) {	
 		if (bit_is_set(PIND,3)) {
@@ -829,7 +1041,8 @@ int main(void)
 	// int1 rising edge interrupt for eject
 	EICRA = 0b00001110;
 
-	if (SDinit()) {
+    dispStr(LCD_ROW1, "  SELECT DISK   ");
+	if (SDinit()) {	
 		// initialize variables
 		readPulse = 0;
 		magState = 0;
@@ -846,10 +1059,11 @@ int main(void)
 		SPCR = 0; 				// off spi
 	} else while (1) ;
 	
+	dispStr(LCD_ROW1, " DISK INSERTED  ");
 	while (1) {
 		if (bit_is_set(PIND, 7)) { 				// disable drive
 			PORTD &= ~(0b00100000);				// LED off
-		} else { 									// enable drive                                                                                                                                                                   
+		} else { 									// enable drive
 			PORTD |= 0b00100000;					// LED on
 			if (bit_is_set(PIND,6)||protect||(PINC&2))
 				PORTD |= 0b00010000;
