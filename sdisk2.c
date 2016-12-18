@@ -44,7 +44,7 @@ connection:
 	D5: LED
 	C5: connect to C6 (RESET) for software reset
     D1: TxD
-	D0: RxD/DOWN
+	D0: RxD
 	D5: UP
 	B0: ENTER
 	
@@ -789,6 +789,7 @@ unsigned char chooseANicFile(void *tempBuff, unsigned char btfExists, unsigned c
 	char filename[] = "filename.NIC";
 	short cur = 0, prevCur = -1;
 	unsigned long i;
+	char button;
 
 	// if there is at least one NIC file,
 	if (num > 0) {
@@ -803,32 +804,16 @@ unsigned char chooseANicFile(void *tempBuff, unsigned char btfExists, unsigned c
 			}
 		}
 		while (1) {
-			if (bit_is_clear(PIND, 6)) { // up button pushed !
-				unsigned char flg = 1;
-			
-				for (i=0; i!=1000; i++) if (bit_is_set(PIND, 6)) flg = 0;
-				if (flg) {
-					while (bit_is_clear(PIND, 6)) nop();
-					if (cur < (num-1)) cur++;
-				}
+		    dispStr(3, "");
+			button = selectButton();
+			if (button == 'U') {
+				if (cur < (num-1)) cur++;
 			}
-			if (bit_is_clear(PIND, 0)) { // down button pushed !
-				unsigned char flg = 1;
-			
-				for (i=0; i!=1000; i++) if (bit_is_set(PIND, 0)) flg = 0;
-				if (flg) {
-					while (bit_is_clear(PIND, 0)) nop();
-					if (cur > 0) cur--;
-				}
+			if (button == 'D') {
+				if (cur > 0) cur--;
 			}
-			if (bit_is_clear(PINB, 0)) { // enter button pushed !
-				unsigned char flg = 1;
-
-				for (i=0; i!=1000; i++) if (bit_is_set(PINB, 0)) flg = 0;
-				if (flg) {
-					while (bit_is_clear(PINB, 0)) nop();
-					break;
-				}
+			if (button == 'S') {
+				break;
 			}
 			// display file name
 			if (prevCur != cur) {
@@ -872,6 +857,7 @@ int SDinit(void)
 	
 	SD_CS_HI;		// disable CS
 
+dispStr(LCD_ROW1, "  SELECT DISK   ");
 	while (1) {
 		SD_CS_LO;
 		cmd_(55, 0);			// command 55
@@ -951,25 +937,33 @@ int SDinit(void)
 
 	if (btfExists||choosen) memcpy(filebase, btfbase, 8);
 
+dispStr(LCD_ROW1, "  SELECT DISK6  ");
 	// find "NIC" extension
 	nicDir = findExt("NIC", &protect, filebase, btfExists||choosen);
+dispStr(LCD_ROW1, "  SELECT DISK61 ");
 	if (nicDir == 512) {		// create NIC file if not exists
 		// find "DSK" extension
 		dskDir = findExt("DSK", (unsigned char *)0, filebase, btfExists);
+dispStr(LCD_ROW1, "  SELECT DISK62 ");
 		if (dskDir == 512) return 0;
+dispStr(LCD_ROW1, "  SELECT DISK63 ");
 		if (!createFile(filebase, "NIC", (unsigned short)560)) return 0;
+dispStr(LCD_ROW1, "  SELECT DISK64 ");
 		nicDir = findExt("NIC", &protect, filebase, btfExists);
 		if (nicDir == 512) return 0;
+dispStr(LCD_ROW1, "  SELECT DISK65 ");
 		// convert DSK image to NIC image
 		dsk2Nic();
 	}
 	
+dispStr(LCD_ROW1, "  SELECT DISK7  ");
 	prevFatNumNic = 0xff;
 	prevFatNumDsk = 0xff;
 	cmd(16, (unsigned long)512);
 	SPCR = 0;					// disable spi
 	LED_OFF;
 	
+dispStr(LCD_ROW1, "  SELECT DISK8  ");
 	return 1;
 }
 

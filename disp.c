@@ -23,6 +23,12 @@ void dispStr(char cmd, char *str)
 		outCharUsart(str[i]);
 }
 
+char selectButton(void)
+{
+	while ( !(UCSR0A & (1<<RXC0)) );
+	return UDR0;
+}
+
 void dispInit(void) {
 
   	const unsigned short baud = (F_CPU / (16UL * USART_BAUD)) - 1;
