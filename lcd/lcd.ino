@@ -99,7 +99,6 @@ void loop()
           break;
         case 3:
           select = 1;
-          lcd.write('*');
           break;
         default:
           lcd.write(c);

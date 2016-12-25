@@ -23,6 +23,15 @@ void dispStr(char cmd, char *str)
 		outCharUsart(str[i]);
 }
 
+// display a string in program area to LCD
+void dispStrP(char cmd, const prog_char *str)
+{
+	char c;
+	
+	outCharUsart(cmd);
+	while (c = pgm_read_byte(str++)) outCharUsart(c);
+}
+
 char selectButton(void)
 {
 	while ( !(UCSR0A & (1<<RXC0)) );
@@ -36,7 +45,7 @@ void dispInit(void) {
 	// initialize USART
 	UBRR0H = (unsigned char)(baud >> 8);
 	UBRR0L = (unsigned char)baud;   
-	UCSR0B = _BV(TXEN0);
+	UCSR0B = _BV(TXEN0) | _BV(RXEN0) ;
 	UCSR0C = (1<<USBS0)|(3<<UCSZ00);
 	dispStr(LCD_CLEAR, "");
 }

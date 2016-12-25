@@ -43,10 +43,8 @@ connection:
 	<others>
 	D5: LED
 	C5: connect to C6 (RESET) for software reset
-    D1: TxD
 	D0: RxD
-	D5: UP
-	B0: ENTER
+    D1: TxD
 	
 	Note that the enable input of the 3state buffer 74HC125,
 	should be connected with DRIVE ENABLE.
@@ -229,6 +227,20 @@ PROGMEM prog_uchar FlipBit1[] = { 0,  2,  1,  3 };
 PROGMEM prog_uchar FlipBit2[] = { 0,  8,  4, 12 };
 PROGMEM prog_uchar FlipBit3[] = { 0, 32, 16, 48 };
 
+// LCD messages
+PROGMEM const char MSG_INIT[] 	= "  SDISK ][ LCD  ";
+PROGMEM const char MSG_VER[]  	= "  FApple2 2016  ";
+PROGMEM const char MSG_NODISK[]	= "    NO DISK     ";
+PROGMEM const char MSG_SEL[]    = "SELECT NIC IMAGE";
+PROGMEM const char MSG_INSERT[] = " DISK INSERTED  ";
+PROGMEM const char MSG_NOFILE[] = " FILE NOT FOUND ";
+PROGMEM const char MSG7[] = "Select NIC image";
+PROGMEM const char MSG8[] = " No image here! ";
+PROGMEM const char MSG9[] = "NIC:            ";
+PROGMEM const char MSGC[] = "building list...";
+PROGMEM const char MSGD[] = "sorting list... ";
+PROGMEM const char PART[] = "Partition:      ";
+
 // buffer clear
 void buffClear(void)
 {
@@ -356,7 +368,7 @@ int findExt(char *targExt, unsigned char *protect,
 		unsigned char name[8], ext[3], d;
 		unsigned char time[2], date[2];
 		
-		if (bit_is_set(PIND,3)) return 512;
+		if (IS_RESET) return 512;
 		// check first char
 		cmd(16, 1);
 		cmd17(rootAddr+i*32);
@@ -501,7 +513,7 @@ int createFile(unsigned char *name, char *ext, unsigned short sectNum)
 	unsigned char c, dirEntry[32], at;
 	static unsigned char last[2] = {0xff, 0xff};
 
-	if (bit_is_set(PIND,3)) return 0;
+	if (IS_RESET) return 0;
 	
 	for (i=0; i<32; i++) dirEntry[i]=0;
 	memcpy(dirEntry, (unsigned char *)name, 8);
@@ -591,6 +603,8 @@ int createNic(unsigned char *name)
 	duplicateFat();
 	return 1;
 }
+
+/* 
 
 // translate a DSK image into a NIC image
 void dsk2Nic(void)
@@ -733,6 +747,8 @@ void dsk2Nic(void)
 	LED_OFF;
 }
 
+*/
+
 // make file name list and sort
 unsigned short makeFileNameList(unsigned short *list, char *targExt)
 {
@@ -743,7 +759,7 @@ unsigned short makeFileNameList(unsigned short *list, char *targExt)
 	for (i=0; i!=512; i++) {
 		unsigned char ext[3], d;
 		
-		if (bit_is_set(PIND,3)) return 512;
+		if (IS_RESET) return 512;
 		// check first char
 		cmd(16, 1);
 		cmd17(rootAddr+i*32);
@@ -791,6 +807,7 @@ unsigned char chooseANicFile(void *tempBuff, unsigned char btfExists, unsigned c
 	unsigned long i;
 	char button;
 
+dispStrP(LCD_ROW1, MSG_SEL);
 	// if there is at least one NIC file,
 	if (num > 0) {
 		// determine first file
@@ -803,8 +820,10 @@ unsigned char chooseANicFile(void *tempBuff, unsigned char btfExists, unsigned c
 				}
 			}
 		}
+		getFileName(list[cur], filename);
+		dispStr(LCD_ROW2, filename);
 		while (1) {
-		    dispStr(3, "");
+			dispStr(3, "");
 			button = selectButton();
 			if (button == 'U') {
 				if (cur < (num-1)) cur++;
@@ -827,6 +846,7 @@ unsigned char chooseANicFile(void *tempBuff, unsigned char btfExists, unsigned c
 		memcpy(filebase, name, 8);
 		return 1;
 	} else {
+dispStrP(LCD_ROW2, MSG_NOFILE);
 		return 0;
 	}
 }
@@ -857,7 +877,7 @@ int SDinit(void)
 	
 	SD_CS_HI;		// disable CS
 
-dispStr(LCD_ROW1, "  SELECT DISK   ");
+dispStrP(LCD_ROW1, MSG_SEL);
 	while (1) {
 		SD_CS_LO;
 		cmd_(55, 0);			// command 55
@@ -937,33 +957,26 @@ dispStr(LCD_ROW1, "  SELECT DISK   ");
 
 	if (btfExists||choosen) memcpy(filebase, btfbase, 8);
 
-dispStr(LCD_ROW1, "  SELECT DISK6  ");
 	// find "NIC" extension
 	nicDir = findExt("NIC", &protect, filebase, btfExists||choosen);
-dispStr(LCD_ROW1, "  SELECT DISK61 ");
-	if (nicDir == 512) {		// create NIC file if not exists
+/*	if (nicDir == 512) {		// create NIC file if not exists
 		// find "DSK" extension
 		dskDir = findExt("DSK", (unsigned char *)0, filebase, btfExists);
-dispStr(LCD_ROW1, "  SELECT DISK62 ");
 		if (dskDir == 512) return 0;
-dispStr(LCD_ROW1, "  SELECT DISK63 ");
 		if (!createFile(filebase, "NIC", (unsigned short)560)) return 0;
-dispStr(LCD_ROW1, "  SELECT DISK64 ");
 		nicDir = findExt("NIC", &protect, filebase, btfExists);
 		if (nicDir == 512) return 0;
-dispStr(LCD_ROW1, "  SELECT DISK65 ");
 		// convert DSK image to NIC image
 		dsk2Nic();
 	}
+*/
 	
-dispStr(LCD_ROW1, "  SELECT DISK7  ");
 	prevFatNumNic = 0xff;
 	prevFatNumDsk = 0xff;
 	cmd(16, (unsigned long)512);
 	SPCR = 0;					// disable spi
 	LED_OFF;
 	
-dispStr(LCD_ROW1, "  SELECT DISK8  ");
 	return 1;
 }
 
@@ -1020,10 +1033,10 @@ int main(void)
 
 	dispInit();
 
-	dispStr(LCD_ROW1, "    NO DISK     ");
+	dispStrP(LCD_ROW1, MSG_NODISK);
 	// wait long low of eject
 	for (i=0; i!=0x80000;i++) {	
-		if (bit_is_set(PIND,3)) {
+		if (IS_RESET) {
 			i=0; continue;
 		}
 	}
@@ -1040,7 +1053,8 @@ int main(void)
 	// int1 rising edge interrupt for eject
 	EICRA = 0b00001110;
 
-    dispStr(LCD_ROW1, "  SELECT DISK   ");
+    dispStrP(LCD_ROW1, MSG_SEL);
+
 	if (SDinit()) {	
 		// initialize variables
 		readPulse = 0;
@@ -1058,7 +1072,7 @@ int main(void)
 		SPCR = 0; 				// off spi
 	} else while (1) ;
 	
-	dispStr(LCD_ROW1, " DISK INSERTED  ");
+	dispStrP(LCD_ROW1, MSG_INSERT);
 	while (1) {
 		if (bit_is_set(PIND, 7)) { 				// disable drive
 			LED_OFF;
