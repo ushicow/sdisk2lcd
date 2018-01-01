@@ -10,7 +10,6 @@
 	
 	Modified by USHIRODA, Atsushi
 ------------------------------------------------------------*/
-
 /*
 hardware information:
 
@@ -56,6 +55,7 @@ connection:
 #include <avr/eeprom.h>
 #include <string.h>
 #include <stdlib.h>
+#include <util/delay.h>
 #include "disp.h"
 
 #define nop() __asm__ __volatile__ ("nop")
@@ -229,17 +229,11 @@ PROGMEM prog_uchar FlipBit3[] = { 0, 32, 16, 48 };
 
 // LCD messages
 PROGMEM const char MSG_INIT[] 	= "  SDISK ][ LCD  ";
-PROGMEM const char MSG_VER[]  	= "  FApple2 2016  ";
+PROGMEM const char MSG_VER[]  	= "  FAPPLE2 2018  ";
 PROGMEM const char MSG_NODISK[]	= "    NO DISK     ";
 PROGMEM const char MSG_SEL[]    = "SELECT NIC IMAGE";
 PROGMEM const char MSG_INSERT[] = " DISK INSERTED  ";
 PROGMEM const char MSG_NOFILE[] = " FILE NOT FOUND ";
-PROGMEM const char MSG7[] = "Select NIC image";
-PROGMEM const char MSG8[] = " No image here! ";
-PROGMEM const char MSG9[] = "NIC:            ";
-PROGMEM const char MSGC[] = "building list...";
-PROGMEM const char MSGD[] = "sorting list... ";
-PROGMEM const char PART[] = "Partition:      ";
 
 // buffer clear
 void buffClear(void)
@@ -1032,6 +1026,9 @@ int main(void)
 	unsigned long i;
 
 	dispInit();
+	dispStrP(LCD_ROW1, MSG_INIT);
+	dispStrP(LCD_ROW2, MSG_VER);
+	_delay_ms(1000);
 
 	dispStrP(LCD_ROW1, MSG_NODISK);
 	// wait long low of eject
