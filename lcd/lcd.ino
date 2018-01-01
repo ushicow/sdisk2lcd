@@ -59,6 +59,7 @@ char read_LCD_button(void)
    int adc_key_in;
    
    adc_key_in = analogRead(0);
+   delay(100);
    if (adc_key_in < 50)   return btnRIGHT;  //0   , 戻り値0, 0V
    if (adc_key_in < 250)  return btnUP;     //144 , 戻り値1, 0.70V
    if (adc_key_in < 450)  return btnDOWN;   //329 , 戻り値2, 1.61V
