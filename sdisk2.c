@@ -1026,9 +1026,11 @@ int main(void)
 	unsigned long i;
 
 	dispInit();
+	_delay_ms(100);
 	dispStrP(LCD_ROW1, MSG_INIT);
 	dispStrP(LCD_ROW2, MSG_VER);
 	_delay_ms(1000);
+	dispStr(LCD_CLEAR, "");
 
 	dispStrP(LCD_ROW1, MSG_NODISK);
 	// wait long low of eject
