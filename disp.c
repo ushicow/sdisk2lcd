@@ -29,7 +29,7 @@ void dispStrP(char cmd, const prog_char *str)
 	char c;
 	
 	outCharUsart(cmd);
-	while (c = pgm_read_byte(str++)) outCharUsart(c);
+	while ((c = pgm_read_byte(str++)) != 0) outCharUsart(c);
 }
 
 char selectButton(void)

@@ -55,6 +55,7 @@ connection:
 #include <avr/eeprom.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <util/delay.h>
 #include "disp.h"
 
@@ -120,10 +121,6 @@ void prepareFat(int i, unsigned short *fat, unsigned short len,
 void duplicateFat(void);
 // write to the SD cart one by one
 void writeSD(unsigned long adr, unsigned char *data, unsigned short len);
-// create a NIC image file
-int createFile(unsigned char *name, char *ext, unsigned short sectNum);
-// translate a NIC image into a DSK image
-int createNic(unsigned char *name);
 // translate a NIC image into a DSK image
 void nic2Dsk(void);
 // translate a DSK image into a NIC image
@@ -186,46 +183,10 @@ unsigned char doBuffering;							// buffering flag
 // a table for head stepper moter movement 
 PROGMEM prog_uchar stepper_table[4] = {0x0f,0xed,0x03,0x21};
 
-// encode / decode table for a nib image
-PROGMEM prog_uchar encTable[] = {
-	0x96,0x97,0x9A,0x9B,0x9D,0x9E,0x9F,0xA6,
-	0xA7,0xAB,0xAC,0xAD,0xAE,0xAF,0xB2,0xB3,
-	0xB4,0xB5,0xB6,0xB7,0xB9,0xBA,0xBB,0xBC,
-	0xBD,0xBE,0xBF,0xCB,0xCD,0xCE,0xCF,0xD3,
-	0xD6,0xD7,0xD9,0xDA,0xDB,0xDC,0xDD,0xDE,
-	0xDF,0xE5,0xE6,0xE7,0xE9,0xEA,0xEB,0xEC,
-	0xED,0xEE,0xEF,0xF2,0xF3,0xF4,0xF5,0xF6,
-	0xF7,0xF9,0xFA,0xFB,0xFC,0xFD,0xFE,0xFF
-};
-PROGMEM prog_uchar decTable[] = {
-	0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-	0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-	0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-	0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-	0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-	0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-	0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-	0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-	0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-	0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x00,0x00,0x02,0x03,0x00,0x04,0x05,0x06,
-	0x00,0x00,0x00,0x00,0x00,0x00,0x07,0x08,0x00,0x00,0x00,0x09,0x0a,0x0b,0x0c,0x0d,
-	0x00,0x00,0x0e,0x0f,0x10,0x11,0x12,0x13,0x00,0x14,0x15,0x16,0x17,0x18,0x19,0x1a,
-	0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x1b,0x00,0x1c,0x1d,0x1e,
-	0x00,0x00,0x00,0x1f,0x00,0x00,0x20,0x21,0x00,0x22,0x23,0x24,0x25,0x26,0x27,0x28,
-	0x00,0x00,0x00,0x00,0x00,0x29,0x2a,0x2b,0x00,0x2c,0x2d,0x2e,0x2f,0x30,0x31,0x32,
-	0x00,0x00,0x33,0x34,0x35,0x36,0x37,0x38,0x00,0x39,0x3a,0x3b,0x3c,0x3d,0x3e,0x3f
-};
-
 // a table for translating logical sectors into physical sectors
 PROGMEM prog_uchar physicalSector[] = {
 	0,13,11,9,7,5,3,1,14,12,10,8,6,4,2,15
 };
-
-// for bit flip
-PROGMEM prog_uchar FlipBit[]  = { 0,  2,  1,  3 };
-PROGMEM prog_uchar FlipBit1[] = { 0,  2,  1,  3 };
-PROGMEM prog_uchar FlipBit2[] = { 0,  8,  4, 12 };
-PROGMEM prog_uchar FlipBit3[] = { 0, 32, 16, 48 };
 
 // LCD messages
 PROGMEM const char MSG_INIT[] 	= "  SDISK ][ LCD  ";
@@ -468,6 +429,7 @@ void writeSD(unsigned long adr, unsigned char *data, unsigned short len)
 	SD_CS_LO;	
 }
 
+/*
 void duplicateFat(void)
 {
 	unsigned short i, j;
@@ -548,199 +510,6 @@ int createFile(unsigned char *name, char *ext, unsigned short sectNum)
 	duplicateFat();
 	return 1;
 }
-
-// create a NIC image file
-int createNic(unsigned char *name)
-{
-	unsigned short re, clusterNum;
-	unsigned long ft, adr;
-	unsigned short d, i;
-	unsigned char c, dirEntry[32], at;
-	static unsigned char last[2] = {0xff, 0xff};
-	
-	for (i=0; i<32; i++) dirEntry[i]=0;
-	memcpy(dirEntry, name, 8);
-	memcpy(dirEntry+8, (unsigned char *)"NIC", 3);
-	*(unsigned long *)(dirEntry+28) = (unsigned long)286720;
-	
-	// search a root directory entry
-	for (re=0; re<512; re++) {
-		cmd(16, 1);
-		cmd17(rootAddr+re*32+0);
-		c = readByte();
-		readByte(); readByte(); // discard CRC bytes
-		cmd17(rootAddr+re*32+11);
-		at = readByte();
-		readByte(); readByte(); // discard CRC bytes
-		if (((c==0xe5)||(c==0x00))&&(at!=0xf)) break;  // find a RDE!
-	}	
-	if (re==512) return 0;
-	// write a directory entry
-	writeSD(rootAddr+re*32, dirEntry, 32);	
-	// search the first fat entry
-	adr = (rootAddr+re*32+26);
-	clusterNum = 0;
-	for (ft=2;
-		(clusterNum<((560+sectorsPerCluster-1)>>sectorsPerCluster2)); ft++) {
-		cmd(16, 2);
-		cmd17(fatAddr+ft*2);
-		d = readByte();
-		d += (unsigned short)readByte()*0x100;
-		readByte(); readByte(); // discard CRC bytes
-		if (d==0) {
-			clusterNum++;
-			writeSD(adr, (unsigned char *)&ft, 2);
-			adr = fatAddr+ft*2;
-		}
-	}
-	writeSD(adr, last, 2);
-	duplicateFat();
-	return 1;
-}
-
-/* 
-
-// translate a DSK image into a NIC image
-void dsk2Nic(void)
-{
-	unsigned char trk, logic_sector;
-
-	unsigned short i;
-	unsigned char *dst = (&writeData[0][0]+512);
-	unsigned short *fatDsk = (unsigned short *)(&writeData[0][0]+1024);
-
-	LED_ON;
-
-	prevFatNumNic = prevFatNumDsk = 0xff;
-
-	for (i=0; i<0x16; i++) dst[i]=0xff;
-
-	// sync header
-	dst[0x16]=0x03;
-	dst[0x17]=0xfc;
-	dst[0x18]=0xff;
-	dst[0x19]=0x3f;
-	dst[0x1a]=0xcf;
-	dst[0x1b]=0xf3;
-	dst[0x1c]=0xfc;
-	dst[0x1d]=0xff;
-	dst[0x1e]=0x3f;
-	dst[0x1f]=0xcf;
-	dst[0x20]=0xf3;
-	dst[0x21]=0xfc;	
-	
-	// address header
-	dst[0x22]=0xd5;
-	dst[0x23]=0xaa;
-	dst[0x24]=0x96;
-	dst[0x2d]=0xde;
-	dst[0x2e]=0xaa;
-	dst[0x2f]=0xeb;
-	
-	// sync header
-	for (i=0x30; i<0x35; i++) dst[i]=0xff;
-	
-	// data
-	dst[0x35]=0xd5;
-	dst[0x36]=0xaa;
-	dst[0x37]=0xad;
-	dst[0x18f]=	0xde;
-	dst[0x190]=0xaa;
-	dst[0x191]=0xeb;
-	for (i=0x192; i<0x1a0; i++) dst[i]=0xff;
-	for (i=0x1a0; i<0x200; i++) dst[i]=0x00;	
-
-	cmd(16, (unsigned long)512);	
-	for (trk = 0; trk < 35; trk++) {
-		LED_FLASH;
-		for (logic_sector = 0; logic_sector < 16; logic_sector++) {
-			unsigned char *src;
-			unsigned short ph_sector = (unsigned short)pgm_read_byte_near(physicalSector+logic_sector);
-
-			if ((logic_sector&1)==0) {
-				unsigned short long_sector = (unsigned short)trk*8+(logic_sector/2);
-				unsigned short long_cluster = long_sector>>sectorsPerCluster2;
-				unsigned char fatNum = long_cluster/FAT_DSK_SIZE;
-				unsigned short ft;
-
-				if (fatNum != prevFatNumDsk) {
-					prevFatNumDsk = fatNum;						
-					prepareFat(dskDir, fatDsk,
-						(280+sectorsPerCluster-1)>>sectorsPerCluster2, fatNum, FAT_DSK_SIZE);	
-				}
-				ft = fatDsk[long_cluster%FAT_DSK_SIZE];
-				cmd17((unsigned long)userAddr+(((unsigned long)(ft-2)<<sectorsPerCluster2)
-					+ (long_sector&(sectorsPerCluster-1)))*(unsigned long)512);
-				for (i=0; i<512; i++) {
-					*(&writeData[0][0]+i)=readByte();
-				}
-				readByte(); readByte(); // discard CRC bytes				
-				src = &writeData[0][0];
-			} else {
-				src = (&writeData[0][0]+256);
-			}
-			{
-				unsigned char c, x, ox = 0;
-
-				dst[0x25]=((volume>>1)|0xaa);
-				dst[0x26]=(volume|0xaa);
-				dst[0x27]=((trk>>1)|0xaa);
-				dst[0x28]=(trk|0xaa);
-				dst[0x29]=((ph_sector>>1)|0xaa);
-				dst[0x2a]=(ph_sector|0xaa);
-				c = (volume^trk^ph_sector);
-				dst[0x2b]=((c>>1)|0xaa);
-				dst[0x2c]=(c|0xaa);
-				for (i = 0; i < 86; i++) {
-					x = (pgm_read_byte_near(FlipBit1+(src[i]&3)) |
-						pgm_read_byte_near(FlipBit2+(src[i+86]&3)) |
-						((i<=83)?pgm_read_byte_near(FlipBit3+(src[i+172]&3)):0));
-					dst[i+0x38] = pgm_read_byte_near(encTable+(x^ox));
-					ox = x;
-				}
-				for (i = 0; i < 256; i++) {
-					x = (src[i] >> 2);
-					dst[i+0x8e] = pgm_read_byte_near(encTable+(x^ox));
-					ox = x;
-				}
-				dst[0x18e]=pgm_read_byte_near(encTable+ox);
-			}
-			{
-				unsigned short long_sector = (unsigned short)trk*16+ph_sector;
-				unsigned short long_cluster = long_sector>>sectorsPerCluster2;
-				unsigned char fatNum = long_cluster/FAT_NIC_SIZE;
-				unsigned short ft;
-			
-				if (fatNum != prevFatNumNic) {
-					prevFatNumNic = fatNum;
-					prepareFat(nicDir, fatNic,
-						(560+sectorsPerCluster-1)>>sectorsPerCluster2, fatNum, FAT_NIC_SIZE);
-				}
-				ft = fatNic[long_cluster%FAT_NIC_SIZE];
-
-				SD_CS_HI;
-				SD_CS_LO;	
-
-				cmd(24, userAddr+(((unsigned long)(ft-2)<<sectorsPerCluster2)
-					+ (long_sector&(sectorsPerCluster-1)))*(unsigned long)512);
-				writeByte(0xff);
-				writeByte(0xfe);
-				for (i = 0; i < 512; i++) writeByte(dst[i]);
-				PORTB = 0b00010000;
-				writeByte(0xff);
-				writeByte(0xff);
-				readByte();
-				waitFinish();
-
-				SD_CS_HI;
-				SD_CS_LO;	
-			}
-		}
-	}
-	buffClear();
-	LED_OFF;
-}
-
 */
 
 // make file name list and sort
@@ -871,7 +640,7 @@ int SDinit(void)
 	
 	SD_CS_HI;		// disable CS
 
-dispStrP(LCD_ROW1, MSG_SEL);
+	dispStrP(LCD_ROW1, MSG_SEL);
 	while (1) {
 		SD_CS_LO;
 		cmd_(55, 0);			// command 55
@@ -953,17 +722,7 @@ dispStrP(LCD_ROW1, MSG_SEL);
 
 	// find "NIC" extension
 	nicDir = findExt("NIC", &protect, filebase, btfExists||choosen);
-/*	if (nicDir == 512) {		// create NIC file if not exists
-		// find "DSK" extension
-		dskDir = findExt("DSK", (unsigned char *)0, filebase, btfExists);
-		if (dskDir == 512) return 0;
-		if (!createFile(filebase, "NIC", (unsigned short)560)) return 0;
-		nicDir = findExt("NIC", &protect, filebase, btfExists);
-		if (nicDir == 512) return 0;
-		// convert DSK image to NIC image
-		dsk2Nic();
-	}
-*/
+	if (nicDir == 512) return 0;
 	
 	prevFatNumNic = 0xff;
 	prevFatNumDsk = 0xff;
@@ -1004,6 +763,9 @@ ISR(PCINT1_vect)
 
 int main(void)
 {
+	char tracknum[] = " TRACK #00.00   ";
+	char pretrk = 0;
+
 	DDRB =  0b00101100;	
 	DDRC =  0b00110000;
 	DDRD =  0b00110000;
@@ -1091,6 +853,11 @@ int main(void)
 					((sectors[3]^sector)|(tracks[3]^trk)) &
 					((sectors[4]^sector)|(tracks[4]^trk))))
 					writeBack();
+				if (trk != pretrk) {
+					sprintf(tracknum, " TRACK #%02d.00   ", trk);
+					dispStr(LCD_ROW1, tracknum);
+					pretrk = trk;
+				}
 				SPCR = ((1<<SPE)|(1<<MSTR));		// enable spi
 				unsigned short long_sector = (unsigned short)trk*16+sector;
 				unsigned short long_cluster = long_sector>>sectorsPerCluster2;
