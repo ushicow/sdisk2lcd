@@ -96,17 +96,17 @@ NOT_PREPARE:
 	adiw	r26,1
 	sts		bitbyte,r26
 	sts		(bitbyte+1),r27
-	cpi		r26,((402*8)%256)
+	cpi		r26,((256*8)%256)
 	brne	LBL1
-	cpi		r27,((402*8)/256)
+	cpi		r27,((256*8)/256)
 	brne	LBL1
 	; set prepare flag
 	ldi		r26,1
 	sts		prepare,r26
-	; discard 112 byte (including CRC 2 byte)
+	; discard CRC 2 byte)
 	push	r28
 	push	r29
-	ldi		r28,112
+	ldi		r28,2
 	ldi		r27,0b00111000
 	ldi		r29,0b00011000
 DSC_LP2:

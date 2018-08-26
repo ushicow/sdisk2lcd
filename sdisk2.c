@@ -63,13 +63,12 @@ connection:
 #define WAIT 1
 
 // write buffer number
-#define BUF_NUM 5				// number of buffer
+#define BUF_NUM 1				// number of buffer
 #define BUF_SIZE 350			// size of a buffer
 #define OUT_TRACK 0xff			// out of track
 #define OUT_SECTOR OUT_TRACK  	// out of sector
 
 // fat buffer size
-#define FAT_DSK_SIZE 18
 #define FAT_NIC_SIZE 35
 
 // for selecting SD card
@@ -103,7 +102,7 @@ void cmd_(unsigned char cmd, unsigned long adr);
 void cmd(unsigned char cmd, unsigned long adr);
 // get command response from the SD card
 unsigned char getResp(void);
-// issue command 17 and get ready for reading
+// issue command 17 and get ready for reading, cmd17:single block read
 void cmd17(unsigned long adr);
 // find a file extension
 
@@ -121,13 +120,9 @@ void prepareFat(int i, unsigned short *fat, unsigned short len,
 void duplicateFat(void);
 // write to the SD cart one by one
 void writeSD(unsigned long adr, unsigned char *data, unsigned short len);
-// translate a NIC image into a DSK image
-void nic2Dsk(void);
-// translate a DSK image into a NIC image
-void dsk2Nic(void);
 unsigned short makeFileNameList(unsigned short *list, char *targExt);
-// choose a NIC file from a NIC file name list
-unsigned char chooseANicFile(void *tempBuff, unsigned char btfExists, unsigned char *filebase);
+// choose a file from file name list
+unsigned char chooseFile(void *tempBuff, unsigned char btfExists, unsigned char *filebase);
 // initialization called from check_eject
 
 // ===== SDISK II main functions =====
@@ -148,15 +143,19 @@ void wait5(unsigned short time);
 // ===== data area =====
 
 // SD card information
-unsigned long bpbAddr, rootAddr;
-unsigned long fatAddr;									// the beginning of FAT
-unsigned char sectorsPerCluster, sectorsPerCluster2;	// sectors per cluster
-unsigned short sectorsPerFat;	
-unsigned long userAddr;									// the beginning of user data
-// unsigned short fatDsk[FAT_DSK_SIZE];					// use writeData instead
+unsigned long bpbAddr;					// the beginning of BPB Address
+unsigned long rootAddr;					// the beginning of Root
+unsigned long fatAddr;					// the beginning of FAT
+unsigned short bytesPerSector;			// Bytes per Sector
+unsigned char sectorsPerCluster;		// sectors per cluster
+unsigned char sectorsPerCluster2;		// sectors per cluster by power of 2
+unsigned short bytesPerCluster;			// Bytes per Cluster
+unsigned short sectorsPerFat;			// sectors per FAT
+unsigned long userAddr;					// the beginning of user data
 unsigned short fatNic[FAT_NIC_SIZE];
-unsigned char prevFatNumDsk, prevFatNumNic;
-unsigned short nicDir, dskDir, btfDir;
+unsigned char prevFatNumNic;
+unsigned short wozDir;
+unsigned short btfDir;
 
 // DISK II status
 volatile unsigned char ph_track;		// 0 - 139
@@ -173,9 +172,11 @@ const unsigned char volume = 0xfe;
 #define EEP_PH_TRACK (uint8_t *)0x0001
 
 // write data buffer
+unsigned long trackPos[160];							// data position of each track
 unsigned char writeData[BUF_NUM][BUF_SIZE];			// write buffer
 unsigned char sectors[BUF_NUM];						// number of sector
 unsigned char tracks[BUF_NUM];						// number of track
+unsigned long bytePos[26];							// byte position of each sector
 unsigned char buffNum;								// current buffer number
 unsigned char *writePtr;							// write data pointer
 unsigned char doBuffering;							// buffering flag
@@ -192,9 +193,10 @@ PROGMEM prog_uchar physicalSector[] = {
 PROGMEM const char MSG_INIT[] 	= "  SDISK ][ LCD  ";
 PROGMEM const char MSG_VER[]  	= "  FAPPLE2 2018  ";
 PROGMEM const char MSG_NODISK[]	= "    NO DISK     ";
-PROGMEM const char MSG_SEL[]    = "SELECT NIC IMAGE";
+PROGMEM const char MSG_SEL[]    = "SELECT WOZ IMAGE";
 PROGMEM const char MSG_INSERT[] = " DISK INSERTED  ";
 PROGMEM const char MSG_NOFILE[] = " FILE NOT FOUND ";
+PROGMEM const char MSG_FAT16[]  = " FAT 16         ";
 
 // buffer clear
 void buffClear(void)
@@ -266,7 +268,7 @@ void cmd_(unsigned char cmd, unsigned long adr)
 	writeByte((adr >> 8) & 0xff);
 	writeByte(adr & 0xff);
 	writeByte(0x95);
-	writeByte(0xff);
+//	writeByte(0xff);
 }
 
 // issue a SD card command and wait normal response
@@ -304,8 +306,8 @@ void getFileName(unsigned short dir, char *name)
 {
 	unsigned char i;
 
-	cmd(16, 8);
-	cmd17(rootAddr+dir*32);
+	cmd(16, 8); // set block length to 8
+	cmd17(rootAddr+dir*32);  // read a block
 	for (i=0; i!=8; i++) *(name++) = (char)readByte();
 	readByte(); readByte(); // discard CRC bytes
 }
@@ -318,45 +320,54 @@ int findExt(char *targExt, unsigned char *protect,
 	unsigned max_file = 512;
 	unsigned short max_time = 0, max_date = 0;
 
-	// find NIC extension
-	for (i=0; i!=512; i++) {
-		unsigned char name[8], ext[3], d;
-		unsigned char time[2], date[2];
+	// find extension
+	for (i = 0; i != 512; i++) {
+		unsigned char name[8];
+		unsigned char ext[3];
+		unsigned char d;
+		unsigned short time;
+		unsigned short date;
 		
 		if (IS_RESET) return 512;
 		// check first char
-		cmd(16, 1);
-		cmd17(rootAddr+i*32);
+		cmd(16, 1);  // set block length to 1
+		cmd17(rootAddr + i * 32);  // read a block
 		d = readByte();
 		readByte(); readByte(); // discard CRC bytes
-		if ((d==0x00)||(d==0x05)||(d==0x2e)||(d==0xe5)) continue;
-		if (!(((d>='A')&&(d<='Z'))||((d>='0')&&(d<='9')))) continue;
-		cmd17(rootAddr+i*32+11);
+		if ((d == 0x00) || (d == 0x05) || (d == 0x2e) || (d == 0xe5)) continue;
+		if (!(((d >= 'A') && (d <= 'Z')) || ((d >= '0') && (d <= '9')))) continue;
+		cmd17(rootAddr + i * 32 + 11);  // file attribute
 		d = readByte();
 		readByte(); readByte(); // discard CRC bytes
-		if (d&0x1e) continue;
-		if (d==0xf) continue;
+		if (d & 0x1e) continue; // plane file
+		if (d == 0xf) continue; // long file name
 		// check extension
 		cmd(16, 12);
-		cmd17(rootAddr+i*32);
-		for (j=0; j!=8; j++) name[j]=readByte();
-		for (j=0; j!=3; j++) ext[j]=readByte();		
-		if (protect) *protect = ((readByte()&1)<<3); else readByte();
+		cmd17(rootAddr + i * 32);
+		for (j = 0; j != 8; j++) name[j] = readByte();
+		for (j = 0; j != 3; j++) ext[j] = readByte();		
+		if (protect) {
+			*protect = ((readByte() & 1) << 3);
+		} else {
+			readByte();
+		}
 		readByte(); readByte(); // discard CRC bytes
 		
 		// check time stamp
 		cmd(16, 4);
-		cmd17(rootAddr+i*32+22);
-		time[0] = readByte(); time[1] = readByte();
-		date[0] = readByte(); date[1] = readByte();
+		cmd17(rootAddr + i * 32 + 22);
+		time = readByte();
+		time += (unsigned short)readByte() * 0x100;
+		date = readByte();
+		date += (unsigned short)readByte() * 0x100;
 		readByte(); readByte(); // discard CRC bytes
 
-		if (memcmp(ext, targExt, 3)==0) {		
-			if ((!withName)||(memcmp(name, targName, 8)==0)) {
-				unsigned short tm = *(unsigned short *)time;
-				unsigned short dt = *(unsigned short *)date;
+		if (memcmp(ext, targExt, 3) == 0) {		
+			if ((!withName) || (memcmp(name, targName, 8) == 0)) {
+				unsigned short tm = time;
+				unsigned short dt = date;
 
-				if ((dt>max_date)||((dt==max_date)&&(tm>=max_time))) {
+				if ((dt > max_date) || ((dt == max_date) && (tm >= max_time))) {
 					max_time = tm;
 					max_date = dt;
 					max_file = i;
@@ -368,37 +379,115 @@ int findExt(char *targExt, unsigned char *protect,
 	if ((max_file != 512) && (targName != 0) && (!withName)) {
 		unsigned char j;
 		cmd(16, 8);
-		cmd17(rootAddr+max_file*32);
-		for (j=0; j<8; j++) targName[j] = readByte();
+		cmd17(rootAddr + max_file * 32);
+		for (j = 0; j < 8; j++) targName[j] = readByte();
 		readByte(); readByte();
 	}
 	return max_file;
 	// if 512 then not found...
 }
 
-// prepare a FAT table on memory
-void prepareFat(int i, unsigned short *fat, unsigned short len,
-	unsigned char fatNum, unsigned char fatElemNum)
+/*
+FAT16 structure
+0   Byte    name[8];            // file name
+8   Byte    extension[3];       // file name extension
+11  Byte    attribute;          // file attribute
+                                //   bit 4    directory flag
+                                //   bit 3    volume flag
+                                //   bit 2    hidden flag
+                                //   bit 1    system flag
+                                //   bit 0    read only flag
+12  Byte    reserved;           // use NT or same OS
+13  Byte    createTimeMs; 
+14  Byte    createTime[2];
+16  Byte    createDate[2];
+18  Byte    accessDate[2];
+20  Byte    clusterHighWord[2];
+22  Byte    updateTime[2];
+24  Byte    updateDate[2];
+26  Byte    cluster[2];         // start cluster number
+28  Byte    fileSize[4];        // file size in bytes (directory is always zero)
+*/
+
+void testWoz(int dir) {
+	unsigned short ft; 
+	char message[17] = "                ";
+	unsigned long pos = 0;
+	unsigned long size = 0;
+	unsigned long tmapPos = 0;
+	unsigned long trksPos = 0;
+	int c;
+	
+	cmd(16, 2);
+	cmd17(rootAddr + dir * 32 + 26);
+	ft = readByte();
+	ft += (unsigned short)readByte() * 0x100;
+	readByte(); readByte(); // discard CRC bytes
+	pos = (unsigned long)(ft - 2) * bytesPerCluster;
+	pos += 12; // woz header size
+	cmd(16, 4);
+	do {
+		cmd17(userAddr + pos);
+		message[0] = readByte();
+		message[1] = readByte();
+		message[2] = readByte();
+		message[3] = readByte();
+		readByte(); readByte();
+		pos += 4;
+		dispStr(LCD_ROW2, message);
+_delay_ms(1000);
+		cmd17(userAddr + pos);
+		size = readByte();
+		size += (unsigned long)readByte() * 0x100;
+		size += (unsigned long)readByte() * 0x10000;
+		size += (unsigned long)readByte() * 0x1000000;
+		readByte(); readByte();
+		pos += 4;
+		if (memcmp(message, "TMAP", 4) == 0) tmapPos = userAddr + pos;
+		if (memcmp(message, "TRKS", 4) == 0) trksPos = pos;
+		pos += size;
+	} while ((tmapPos == 0) || (trksPos == 0));
+	for (c = 0; c < 160; ++c) {
+		cmd(16, 1);
+		cmd17(tmapPos + c);
+		trackPos[c] = trksPos + (unsigned long)readByte() * 6656;
+		readByte(); readByte();
+	}
+//	dispStr(LCD_ROW2, "DEBUG1");
+}
+
+// prepare a BytePosition table on memory
+void prepareBytePos(int dir, unsigned long *pos, unsigned long start, unsigned long len)
 {
 	unsigned short ft;
-	unsigned char fn;
+	unsigned short fs;
+	unsigned long i;
+	unsigned short c; // cluster
+    unsigned  b;
 
-	cmd(16, (unsigned long)2);
-	cmd17(rootAddr+i*32+26);
+	cmd(16, 2);		// block size = 2
+	cmd17(rootAddr + dir * 32 + 26);    // start cluster number
 	ft = readByte();
 	ft += (unsigned short)readByte()*0x100;
 	readByte(); readByte(); // discard CRC bytes
-	if (0==fatNum) fat[0] = ft;
-	for (i=0; i<len; i++) {
-		fn = (i+1)/fatElemNum;
-		cmd17((unsigned long)fatAddr+(unsigned long)ft*2);
-		ft = readByte();
-		ft += (unsigned short)readByte()*0x100;
-		readByte(); readByte(); // discard CRC bytes
-		if (fn==fatNum) fat[(i+1)%fatElemNum] = ft;
-		if ((ft>0xfff6)||(fn>fatNum)) break;
+	fs = ft;
+	for (i = 0; i < len; i += 256) {
+		c = (start + i) / bytesPerCluster;
+		b = (start + i) % bytesPerCluster;
+		while (c--) {
+			cmd17((unsigned long)fatAddr + (unsigned long)ft * 2);
+			ft = readByte();
+			ft += (unsigned short)readByte() * 0x100;
+			readByte(); readByte(); // discard CRC bytes
+			if (ft > 0xfff6) break;
+		}
+		pos[i >> 7] = (ft - 2) * bytesPerCluster + b;
+		ft = fs;
+		char msg[17];
+		sprintf(msg, "%8ld%8lx", i >> 7, pos[i >> 7]);
+		dispStr(LCD_ROW2, msg);
 	}
-	cmd(16, (unsigned long)512);	
+	cmd(16, (unsigned long)256);	
 }
 
 
@@ -416,7 +505,7 @@ void writeSD(unsigned long adr, unsigned char *data, unsigned short len)
 	SD_CS_HI;
 	SD_CS_LO;
 				
-	cmd(24,adr&0xfffffe00);		
+	cmd(24,adr&0xfffffe00);		// single block write
 	writeByte(0xff);
 	writeByte(0xfe);
 	for (i=0; i<512; i++) writeByte(buf[i]);
@@ -519,63 +608,65 @@ unsigned short makeFileNameList(unsigned short *list, char *targExt)
 	char name1[8], name2[8];
 
 	// find extension
-	for (i=0; i!=512; i++) {
+	for (i = 0; i != 512; i++) {
 		unsigned char ext[3], d;
 		
 		if (IS_RESET) return 512;
 		// check first char
 		cmd(16, 1);
-		cmd17(rootAddr+i*32);
+		cmd17(rootAddr + i * 32);
 		d = readByte();
 		readByte(); readByte(); // discard CRC bytes
-		if ((d==0x00)||(d==0x05)||(d==0x2e)||(d==0xe5)) continue;
-		if (!(((d>='A')&&(d<='Z'))||((d>='0')&&(d<='9')))) continue;
-		cmd17(rootAddr+i*32+11);
+		if ((d == 0x00) || (d == 0x05) || (d == 0x2e) || (d == 0xe5)) continue;
+		if (!(((d >= 'A') && (d <= 'Z')) || ((d >= '0') && (d <= '9')))) continue;
+		cmd17(rootAddr + i * 32 + 11);
 		d = readByte();
 		readByte(); readByte(); // discard CRC bytes
-		if (d&0x1e) continue;
-		if (d==0xf) continue;
+		if (d & 0x1e) continue;
+		if (d == 0xf) continue;
 		// check extension
 		cmd(16, 3);
-		cmd17(rootAddr+i*32+8);
-		for (j=0; j!=3; j++) ext[j]=readByte();		
+		cmd17(rootAddr + i * 32 + 8);
+		for (j=0; j != 3; j++) ext[j] = readByte();		
 		readByte(); readByte(); // discard CRC bytes
 		if (memcmp(ext, targExt, 3)==0) {	
 			list[entryNum++] = i;
 		}
 	}
 	// sort
-	if (entryNum>1) for (i=0; i<=(entryNum-2); i++) {
-		for (j=1; j<=(entryNum-i-1); j++) {
-			getFileName(list[j], name1);
-			getFileName(list[j-1], name2);
-			if (memcmp(name1, name2,8) < 0) {
-				k = list[j];
-				list[j] = list[j-1];
-				list[j-1]=k;
+	if (entryNum > 1) {
+		for (i = 0; i <= (entryNum - 2); i++) {
+			for (j=1; j<=(entryNum - i - 1); j++) {
+				getFileName(list[j], name1);
+				getFileName(list[j - 1], name2);
+				if (memcmp(name1, name2, 8) < 0) {
+					k = list[j];
+					list[j] = list[j - 1];
+					list[j - 1]=k;
+				}
 			}
 		}
 	}	
 	return entryNum;
 }
 
-// choose a NIC file from a NIC file name list
-unsigned char chooseANicFile(void *tempBuff, unsigned char btfExists, unsigned char *filebase)
+// choose a file from file name list
+unsigned char chooseFile(void *tempBuff, unsigned char btfExists, unsigned char *filebase)
 {
 	unsigned short *list = (unsigned short *)tempBuff;
-	unsigned short num = makeFileNameList(list, "NIC");
+	unsigned short num = makeFileNameList(list, "WOZ");
 	char name[8];
-	char filename[] = "filename.NIC";
+	char filename[] = "filename.WOZ";
 	short cur = 0, prevCur = -1;
 	unsigned long i;
 	char button;
 
-dispStrP(LCD_ROW1, MSG_SEL);
-	// if there is at least one NIC file,
+	dispStrP(LCD_ROW1, MSG_SEL);
+	// if there is at least one file,
 	if (num > 0) {
 		// determine first file
 		if (btfExists) {
-			for (i=0; i<num; i++) {
+			for (i=0; i < num; i++) {
 				getFileName(list[i], name);
 				if (memcmp(name, filebase, 8)==0) {
 					cur = i;
@@ -589,7 +680,7 @@ dispStrP(LCD_ROW1, MSG_SEL);
 			dispStr(3, "");
 			button = selectButton();
 			if (button == 'U') {
-				if (cur < (num-1)) cur++;
+				if (cur < (num - 1)) cur++;
 			}
 			if (button == 'D') {
 				if (cur > 0) cur--;
@@ -609,7 +700,7 @@ dispStrP(LCD_ROW1, MSG_SEL);
 		memcpy(filebase, name, 8);
 		return 1;
 	} else {
-dispStrP(LCD_ROW2, MSG_NOFILE);
+		dispStrP(LCD_ROW2, MSG_NOFILE);
 		return 0;
 	}
 }
@@ -619,9 +710,11 @@ int SDinit(void)
 {
 	unsigned char ch;
 	unsigned short i;
-	char str[5];
-	unsigned char filebase[8], btfbase[8];
-	unsigned char btfExists, choosen;
+	char str[17];
+	unsigned char filebase[8];
+	unsigned char btfbase[8];
+	unsigned char btfExists;
+	unsigned char choosen;
 
 	LED_ON;
 
@@ -643,14 +736,14 @@ int SDinit(void)
 	dispStrP(LCD_ROW1, MSG_SEL);
 	while (1) {
 		SD_CS_LO;
-		cmd_(55, 0);			// command 55
+		cmd_(55, 0);			// command 55 application command
 		ch = getResp();
 		if (ch == 0xff) return 0;
 		if (ch & 0xfe) continue;
 		// if (ch == 0x00) break;
 		SD_CS_HI;
 		SD_CS_LO;
-		cmd_(41, 0);			// command 41	
+		cmd_(41, 0);			// command 41 application command
 		if (!(ch=getResp())) break;
 		if (ch == 0xff) return 0;
 		SD_CS_HI;
@@ -665,27 +758,34 @@ int SDinit(void)
 	cmd17(54);
 	for (i=0; i<5; i++) str[i] = readByte();
 	readByte(); readByte();	// discard CRC
-	if ((str[0]=='F')&&(str[1]=='A')&&(str[2]=='T')&&
-		(str[3]=='1')&&(str[4]=='6')) {
+	if (memcmp(str, "FAT16", 5) == 0) {
 		bpbAddr = 0;
-	} else {
+		dispStrP(LCD_ROW1, MSG_FAT16);
+		_delay_ms(1000);
+	} else {	// MBR
 		cmd(16, 4);
-		cmd17((unsigned long)0x1c6);
+		cmd17(0x1c6);
 		bpbAddr = readByte();
 		bpbAddr += (unsigned long)readByte()*0x100;
 		bpbAddr += (unsigned long)readByte()*0x10000;
 		bpbAddr += (unsigned long)readByte()*0x1000000;
 		bpbAddr *= 512;
 		readByte(); readByte(); // discard CRC bytes
+		sprintf(str, "   MBR $%08lx", bpbAddr);
+		dispStr(LCD_ROW1, str);
+		_delay_ms(1000);
 	}
 
 	// sectorsPerCluster and reservedSectors
 	{
 		unsigned short reservedSectors;
 		volatile unsigned char k;
-		cmd(16, 3);
-		cmd17(bpbAddr+0xd);
+		cmd(16, 5);
+		cmd17(bpbAddr + 11);
+		bytesPerSector = readByte();
+		bytesPerSector += (unsigned short)readByte() * 0x100;
 		sectorsPerCluster = k = readByte();
+		bytesPerCluster = bytesPerSector * sectorsPerCluster;
 		sectorsPerCluster2 = 0;
 			while (k != 1) {
 			sectorsPerCluster2++;
@@ -696,37 +796,45 @@ int SDinit(void)
 		readByte(); readByte(); // discard CRC bytes	
 		// sectorsPerCluster = 0x40 at 2GB, 0x10 at 512MB
 		// reservedSectors = 2 at 2GB
-		fatAddr = bpbAddr + (unsigned long)512*reservedSectors;
+		fatAddr = bpbAddr + bytesPerSector * reservedSectors;
+		sprintf(str, "   FAT $%08lx", fatAddr);
+		dispStr(LCD_ROW1, str);	
+		_delay_ms(1000);	
 	}
 
+	// sectorsPerFat and rootAddr
 	{
-		// sectorsPerFat and rootAddr
+		unsigned short rootEntryCount;
 		cmd(16, 2);
-		cmd17(bpbAddr+0x16);
+		cmd17(bpbAddr + 17);
+		rootEntryCount = readByte();
+		rootEntryCount += (unsigned short)readByte() * 0x100;
+		readByte(); readByte(); // discard CRC bytes				
+		cmd17(bpbAddr + 22);
 		sectorsPerFat = readByte();
-		sectorsPerFat += (unsigned short)readByte()*0x100;
+		sectorsPerFat += (unsigned short)readByte() * 0x100;
 		readByte(); readByte(); // discard CRC bytes		
-		// sectorsPerFat =  at 512MB,  0xEF at 2GB
-		rootAddr = fatAddr + ((unsigned long)sectorsPerFat*2*512);
-		userAddr = rootAddr+(unsigned long)512*32;
+		rootAddr = fatAddr + (unsigned long)sectorsPerFat * 2 * bytesPerSector;
+		userAddr = rootAddr + (unsigned long)rootEntryCount * 32;
 	}
 	
 	// find "BTF" boot file
 	btfDir = findExt("BTF", (unsigned char *)0, btfbase, 0);
-	btfExists = (btfDir!=512);
+	btfExists = (btfDir != 512);
 
-    // choose a NIC file from a NIC file list
-	choosen = chooseANicFile(&writeData[0][0], btfExists, btfbase);
+    // choose a file from file list
+	choosen = chooseFile(&writeData[0][0], btfExists, btfbase);
 
-	if (btfExists||choosen) memcpy(filebase, btfbase, 8);
+	if (btfExists || choosen) memcpy(filebase, btfbase, 8);
 
-	// find "NIC" extension
-	nicDir = findExt("NIC", &protect, filebase, btfExists||choosen);
-	if (nicDir == 512) return 0;
+	// find "WOZ" extension
+	wozDir = findExt("WOZ", &protect, filebase, btfExists || choosen);
+	if (wozDir == 512) return 0;
+
+	testWoz(wozDir);
 	
 	prevFatNumNic = 0xff;
-	prevFatNumDsk = 0xff;
-	cmd(16, (unsigned long)512);
+	cmd(16, (unsigned long)256);
 	SPCR = 0;					// disable spi
 	LED_OFF;
 	
@@ -764,7 +872,8 @@ ISR(PCINT1_vect)
 int main(void)
 {
 	char tracknum[] = " TRACK #00.00   ";
-	char pretrk = 0;
+	char subtrack[4][3] = {"00", "25", "50", "75"};
+	char pretrk = 0xff;
 
 	DDRB =  0b00101100;	
 	DDRC =  0b00110000;
@@ -845,31 +954,25 @@ int main(void)
 				DISK2_WP_OFF;
 			if (prepare) {
 				TIMSK0 &= ~(1<<OCIE0A);			// disable timer0
-				sector = ((sector+1)&0xf);
-				unsigned char trk = (ph_track>>2);
-				if (!(((sectors[0]^sector)|(tracks[0]^trk)) &
-					((sectors[1]^sector)|(tracks[1]^trk)) &
-					((sectors[2]^sector)|(tracks[2]^trk)) &
-					((sectors[3]^sector)|(tracks[3]^trk)) &
-					((sectors[4]^sector)|(tracks[4]^trk))))
-					writeBack();
-				if (trk != pretrk) {
-					sprintf(tracknum, " TRACK #%02d.00   ", trk);
-					dispStr(LCD_ROW1, tracknum);
-					pretrk = trk;
-				}
+				sector = ((sector >= 25) ? 0 : sector + 1);
+dispStr(LCD_ROW2, "DEBUG2");
+//				unsigned char trk = (ph_track>>2);
+//				if (!(((sectors[0]^sector)|(tracks[0]^trk)) &
+//					((sectors[1]^sector)|(tracks[1]^trk)) &
+//					((sectors[2]^sector)|(tracks[2]^trk)) &
+//					((sectors[3]^sector)|(tracks[3]^trk)) &
+//					((sectors[4]^sector)|(tracks[4]^trk))))
+//					writeBack();
 				SPCR = ((1<<SPE)|(1<<MSTR));		// enable spi
-				unsigned short long_sector = (unsigned short)trk*16+sector;
-				unsigned short long_cluster = long_sector>>sectorsPerCluster2;
-				unsigned char fatNum = long_cluster/FAT_NIC_SIZE;
-				unsigned short ft;
-				if (fatNum != prevFatNumNic) {
-					prevFatNumNic = fatNum;
-					prepareFat(nicDir, fatNic, (560+sectorsPerCluster-1)>>sectorsPerCluster2, fatNum, FAT_NIC_SIZE);
+				if (ph_track != pretrk) {
+					sprintf(tracknum, " TRACK #%02d.%s   ", ph_track >> 2, subtrack[ph_track % 3]);
+					dispStr(LCD_ROW1, tracknum);
+					prepareBytePos(wozDir, bytePos, trackPos[ph_track] + sector * 256, 6656);
+					pretrk = ph_track;
 				}
-				ft = fatNic[long_cluster%FAT_NIC_SIZE];
-				cmd17(userAddr+(((unsigned long)(ft-2)<<sectorsPerCluster2)
-					+ (long_sector&(sectorsPerCluster-1)))*512);
+				sprintf(tracknum, "%4d    %8lx", sector, bytePos[sector]);
+				dispStr(LCD_ROW2, tracknum);
+				cmd17(bytePos[sector]);
 				bitbyte = 0;
 				prepare = 0;
 				SPCR = 0;							// disable SPI
@@ -898,8 +1001,8 @@ void writeBackSub(unsigned char bn, unsigned char sc, unsigned char track)
 	// BPB address
 	if (fatNum != prevFatNumNic) {
 		prevFatNumNic = fatNum;
-		prepareFat(nicDir, fatNic,
-			(560+sectorsPerCluster-1)>>sectorsPerCluster2, fatNum, FAT_NIC_SIZE);
+//		prepareFat(wozDir, fatNic,
+//			(560+sectorsPerCluster-1)>>sectorsPerCluster2, fatNum, FAT_NIC_SIZE);
 	}
 	ft = fatNic[long_cluster%FAT_NIC_SIZE];
 	
