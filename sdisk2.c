@@ -268,7 +268,7 @@ void cmd_(unsigned char cmd, unsigned long adr)
 	writeByte((adr >> 8) & 0xff);
 	writeByte(adr & 0xff);
 	writeByte(0x95);
-//	writeByte(0xff);
+	writeByte(0xff);
 }
 
 // issue a SD card command and wait normal response
@@ -435,7 +435,7 @@ void testWoz(int dir) {
 		readByte(); readByte();
 		pos += 4;
 		dispStr(LCD_ROW2, message);
-_delay_ms(1000);
+_delay_ms(100);
 		cmd17(userAddr + pos);
 		size = readByte();
 		size += (unsigned long)readByte() * 0x100;
@@ -453,7 +453,7 @@ _delay_ms(1000);
 		trackPos[c] = trksPos + (unsigned long)readByte() * 6656;
 		readByte(); readByte();
 	}
-//	dispStr(LCD_ROW2, "DEBUG1");
+	dispStr(LCD_ROW2, "DEBUG1");
 }
 
 // prepare a BytePosition table on memory
@@ -462,18 +462,25 @@ void prepareBytePos(int dir, unsigned long *pos, unsigned long start, unsigned l
 	unsigned short ft;
 	unsigned short fs;
 	unsigned long i;
-	unsigned short c; // cluster
+	unsigned long c; // cluster
     unsigned  b;
+	char msg[17];
 
 	cmd(16, 2);		// block size = 2
 	cmd17(rootAddr + dir * 32 + 26);    // start cluster number
 	ft = readByte();
-	ft += (unsigned short)readByte()*0x100;
+	ft += (unsigned short)readByte() * 0x100;
 	readByte(); readByte(); // discard CRC bytes
 	fs = ft;
+//	sprintf(msg, "FT=%04x    ", ft);
+//	dispStr(LCD_ROW2, msg);
+//	_delay_ms(100);
 	for (i = 0; i < len; i += 256) {
-		c = (start + i) / bytesPerCluster;
+		c = (start + i) / bytesPerCluster - (fs - 2);
 		b = (start + i) % bytesPerCluster;
+//		sprintf(msg, "%08lx%08lx", start + i, c);
+//		dispStr(LCD_ROW2, msg);
+//		_delay_ms(100);
 		while (c--) {
 			cmd17((unsigned long)fatAddr + (unsigned long)ft * 2);
 			ft = readByte();
@@ -481,15 +488,14 @@ void prepareBytePos(int dir, unsigned long *pos, unsigned long start, unsigned l
 			readByte(); readByte(); // discard CRC bytes
 			if (ft > 0xfff6) break;
 		}
-		pos[i >> 7] = (ft - 2) * bytesPerCluster + b;
+		pos[i >> 8] = userAddr + (unsigned long)(ft - 2) * bytesPerCluster + b;
+//		sprintf(msg, "%04lx%04x%08lx", i >> 8, ft, pos[i >> 8]);
+//		dispStr(LCD_ROW2, msg);
+//		_delay_ms(200);
 		ft = fs;
-		char msg[17];
-		sprintf(msg, "%8ld%8lx", i >> 7, pos[i >> 7]);
-		dispStr(LCD_ROW2, msg);
 	}
-	cmd(16, (unsigned long)256);	
+	cmd(16, 256);	
 }
-
 
 void writeSD(unsigned long adr, unsigned char *data, unsigned short len)
 {
@@ -718,13 +724,14 @@ int SDinit(void)
 
 	LED_ON;
 
+	_delay_ms(1);
 	//SPI enable, master mode, f/128
 	SPCR = ((1<<SPE)|(1<<MSTR)|(1<<SPR1)|(1<<SPR0));
 
 	SD_CS_HI;					// disable CS
 	for(i=0; i < 10; i++) writeByte(0xFF);	// Send 10 * 8 = 80 clock
 	SD_CS_LO;					// enable CS
-	for(i=0; i < 2; i++) writeByte(0xFF);	// Send 2 * 8 = 16 clock
+//	for(i=0; i < 2; i++) writeByte(0xFF);	// Send 2 * 8 = 16 clock
 
 	cmd_(0, 0);	// command 0
  	do {	
@@ -761,7 +768,7 @@ int SDinit(void)
 	if (memcmp(str, "FAT16", 5) == 0) {
 		bpbAddr = 0;
 		dispStrP(LCD_ROW1, MSG_FAT16);
-		_delay_ms(1000);
+		_delay_ms(100);
 	} else {	// MBR
 		cmd(16, 4);
 		cmd17(0x1c6);
@@ -773,7 +780,7 @@ int SDinit(void)
 		readByte(); readByte(); // discard CRC bytes
 		sprintf(str, "   MBR $%08lx", bpbAddr);
 		dispStr(LCD_ROW1, str);
-		_delay_ms(1000);
+		_delay_ms(100);
 	}
 
 	// sectorsPerCluster and reservedSectors
@@ -786,6 +793,13 @@ int SDinit(void)
 		bytesPerSector += (unsigned short)readByte() * 0x100;
 		sectorsPerCluster = k = readByte();
 		bytesPerCluster = bytesPerSector * sectorsPerCluster;
+		sprintf(str, "Bytes/Sector%04d", bytesPerSector);
+		dispStr(LCD_ROW1, str);
+		_delay_ms(1000);
+		sprintf(str, "Sec/Cluster %04d", sectorsPerCluster);
+		dispStr(LCD_ROW1, str);
+		_delay_ms(1000);
+		
 		sectorsPerCluster2 = 0;
 			while (k != 1) {
 			sectorsPerCluster2++;
@@ -799,7 +813,7 @@ int SDinit(void)
 		fatAddr = bpbAddr + bytesPerSector * reservedSectors;
 		sprintf(str, "   FAT $%08lx", fatAddr);
 		dispStr(LCD_ROW1, str);	
-		_delay_ms(1000);	
+		_delay_ms(100);	
 	}
 
 	// sectorsPerFat and rootAddr
@@ -815,7 +829,13 @@ int SDinit(void)
 		sectorsPerFat += (unsigned short)readByte() * 0x100;
 		readByte(); readByte(); // discard CRC bytes		
 		rootAddr = fatAddr + (unsigned long)sectorsPerFat * 2 * bytesPerSector;
+		sprintf(str, "  ROOT $%08lx", rootAddr);
+		dispStr(LCD_ROW1, str);	
+		_delay_ms(100);
 		userAddr = rootAddr + (unsigned long)rootEntryCount * 32;
+		sprintf(str, "  USER $%08lx", userAddr);
+		dispStr(LCD_ROW1, str);	
+		_delay_ms(100);	
 	}
 	
 	// find "BTF" boot file
@@ -834,7 +854,7 @@ int SDinit(void)
 	testWoz(wozDir);
 	
 	prevFatNumNic = 0xff;
-	cmd(16, (unsigned long)256);
+	cmd(16, 256);
 	SPCR = 0;					// disable spi
 	LED_OFF;
 	
@@ -931,7 +951,7 @@ int main(void)
 		magState = 0;
 		prepare = 1;
 		bitbyte = 0;
-		sector = 0;
+		sector = 25;
 		buffNum = 0;
 		formatting = 0;
 		writePtr = &(writeData[buffNum][0]);
@@ -955,7 +975,6 @@ int main(void)
 			if (prepare) {
 				TIMSK0 &= ~(1<<OCIE0A);			// disable timer0
 				sector = ((sector >= 25) ? 0 : sector + 1);
-dispStr(LCD_ROW2, "DEBUG2");
 //				unsigned char trk = (ph_track>>2);
 //				if (!(((sectors[0]^sector)|(tracks[0]^trk)) &
 //					((sectors[1]^sector)|(tracks[1]^trk)) &
@@ -970,8 +989,9 @@ dispStr(LCD_ROW2, "DEBUG2");
 					prepareBytePos(wozDir, bytePos, trackPos[ph_track] + sector * 256, 6656);
 					pretrk = ph_track;
 				}
-				sprintf(tracknum, "%4d    %8lx", sector, bytePos[sector]);
-				dispStr(LCD_ROW2, tracknum);
+//				sprintf(tracknum, "%4d    %8lx", sector, bytePos[sector]);
+//				dispStr(LCD_ROW2, tracknum);
+//				_delay_ms(100);
 				cmd17(bytePos[sector]);
 				bitbyte = 0;
 				prepare = 0;
