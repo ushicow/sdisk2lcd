@@ -63,7 +63,7 @@ connection:
 #define WAIT 1
 
 // write buffer number
-#define BUF_NUM 5				// number of buffer
+#define BUF_NUM 2				// number of buffer
 #define BUF_SIZE 350			// size of a buffer
 #define OUT_TRACK 0xff			// out of track
 #define OUT_SECTOR OUT_TRACK  	// out of sector
@@ -764,6 +764,7 @@ ISR(PCINT1_vect)
 int main(void)
 {
 	char tracknum[] = " TRACK #00.00   ";
+	char subtrk[4][3] = {"00", "25", "50", "75"};
 	char pretrk = 0;
 
 	DDRB =  0b00101100;	
@@ -854,7 +855,7 @@ int main(void)
 					((sectors[4]^sector)|(tracks[4]^trk))))
 					writeBack();
 				if (trk != pretrk) {
-					sprintf(tracknum, " TRACK #%02d.00   ", trk);
+					sprintf(tracknum, " TRACK #%02d.%s   ", ph_track >> 2, subtrk[ph_track & 3]);
 					dispStr(LCD_ROW1, tracknum);
 					pretrk = trk;
 				}
